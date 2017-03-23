@@ -1,5 +1,44 @@
 defmodule GlobalPayments.Api.Gateways.PorticoConnector do
   alias GlobalPayments.Api.Builders.AuthorizationBuilder
+  alias GlobalPayments.Api.PaymentMethods.TransactionReference
+  import GlobalPayments.Api.Gateways.XmlGateway
+  import GlobalPayments.Api.Gateways.XmlGateway.XmlNode
+
+  defmodule Transaction do
+    @behaviour Access
+
+    defstruct response_code: nil,
+              response_text: nil,
+              transaction_reference: nil,
+              authorized_amount: nil,
+              commercial_indicator: nil,
+              token: nil,
+              balance_amount: nil,
+              points_balance_amount: nil,
+              gift_card: nil
+
+    ## `Access` behaviour implementations
+
+    def fetch(term, key) do
+      Map.fetch(term, key)
+    end
+
+    def get(term, key, default) do
+      Map.get(term, key, default)
+    end
+
+    def get_and_update(term, key, list) do
+      Map.get(term, key, list)
+    end
+
+    def pop(term, key) do
+      Map.pop(term, key)
+    end
+  end
+
+  defmodule GatewayError do
+    defexception message: nil
+  end
 
   defmodule NotImplementedError do
     defexception message: nil
@@ -79,22 +118,28 @@ defmodule GlobalPayments.Api.Gateways.PorticoConnector do
   end
 
   def process_authorization(%AuthorizationBuilder{} = builder, config) do
-    [
-      {map_request_type(builder), [
-        {:Block1, [
-          {:CardData, [
-            {:ManualEntry, maybe_add_elements([], builder.payment_method, [
-                number: :CardNbr,
-                exp_month: :ExpMonth,
-                exp_year: :ExpYear,
-                cvn: :CVV2,
-              ])}
-          ]},
-          builder.amount && {:Amt, [builder.amount |> String.to_charlist]}
+    request_data =
+      [
+        {map_request_type(builder), [
+          {:Block1, [
+            {:CardData, [
+              {:ManualEntry, maybe_add_elements([], builder.payment_method, [
+                  number: :CardNbr,
+                  exp_month: :ExpMonth,
+                  exp_year: :ExpYear,
+                  cvn: :CVV2,
+                ])}
+            ]},
+            builder.amount && {:Amt, [builder.amount |> to_charlist]}
+          ]}
         ]}
-      ]}
-    ]
-    |> build_envelope(config)
+      ]
+      |> build_envelope(config)
+
+    config
+    |> client()
+    |> do_transaction("/Hps.Exchange.PosGateway/PosGatewayService.asmx", request_data)
+    |> map_response(builder)
   end
 
   def build_envelope(transaction, config \\ %{}) do
@@ -119,11 +164,78 @@ defmodule GlobalPayments.Api.Gateways.PorticoConnector do
     |> Enum.join()
   end
 
+  defp map_response(raw_response, builder) do
+    {root, _} =
+      raw_response
+      |> to_charlist()
+      |> :xmerl_scan.string()
+    accepted_codes = ["00", "0", "85", "10"]
+
+    gateway_response_code = node_value(root, "//GatewayRspCode")
+    gateway_response_text = node_value(root, "//GatewayRspMsg")
+
+    unless Enum.member?(accepted_codes, gateway_response_code) do
+      raise GatewayError, message: "Unexpected gateway response: #{gateway_response_code} - #{gateway_response_text}"
+    end
+
+    response_code = node_value(root, "//RspCode") || gateway_response_code
+    response_text =
+      node_value(root, "//RspText")
+      || gateway_response_text
+
+    auth_code = node_value(root, "//AuthCode")
+    transaction_reference =
+      if builder.payment_method || auth_code do
+        struct(TransactionReference,
+          payment_method_type: builder.payment_method && builder.payment_method.payment_method_type,
+          authorization_code: auth_code
+        )
+      end
+
+    struct(Transaction,
+      response_code: normalize_response_code(response_code),
+      response_text: response_text,
+      transaction_reference: transaction_reference
+    )
+  end
+
+  def normalize_response_code(response_code) do
+    if Enum.member?(["0", "85"], response_code) do
+      "00"
+    else
+      response_code
+    end
+  end
+
+  def node_value(root, path) when is_binary(path) do
+    node_value(root, to_charlist(path))
+  end
+  def node_value(root, path) do
+    :xmerl_xpath.string(path, root)
+    |> List.first()
+    |> get_node()
+    |> Access.get(:content)
+    |> get_value()
+  end
+
+  defp get_node(nil), do: nil
+  defp get_node(node) do
+    node |> xmlElement
+  end
+
+  defp get_value(nil), do: nil
+  defp get_value([]), do: nil
+  defp get_value([node | _]) do
+    node
+    |> xmlText()
+    |> Access.get(:value)
+    |> to_string()
+  end
+
   defp build_header(config) do
     credentials =
-      []
-      |> maybe_add_elements(config, [
-        secret_api_key: :SecretApiKey,
+      maybe_add_elements([], config, [
+        secret_api_key: :SecretAPIKey,
         site_id: :SiteId,
         license_id: :LicenseId,
         device_id: :DeviceId,
@@ -344,7 +456,7 @@ defmodule GlobalPayments.Api.Gateways.PorticoConnector do
     Enum.reduce(key_map, elements, fn ({key, tag}, acc) ->
       case Access.fetch(container, key) do
         :error -> acc
-        {:ok, term} -> [{tag, [String.to_charlist(term)]} | acc]
+        {:ok, term} -> [{tag, [to_charlist(term)]} | acc]
       end
     end)
   end
