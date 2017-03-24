@@ -1,121 +1,11 @@
 defmodule GlobalPayments.Api.Gateways.PorticoConnector do
   alias GlobalPayments.Api.Builders.AuthorizationBuilder
+  alias GlobalPayments.Api.Entities.Enums.{PaymentMethodType, TransactionModifier, TransactionType}
+  alias GlobalPayments.Api.Entities.Errors.{GatewayError, NotImplementedError, UnsupportedTransactionError}
+  alias GlobalPayments.Api.Entities.Transaction
   alias GlobalPayments.Api.PaymentMethods.TransactionReference
   import GlobalPayments.Api.Gateways.XmlGateway
-  import GlobalPayments.Api.Gateways.XmlGateway.XmlNode
-
-  defmodule Transaction do
-    @behaviour Access
-
-    defstruct response_code: nil,
-              response_text: nil,
-              transaction_reference: nil,
-              authorized_amount: nil,
-              commercial_indicator: nil,
-              token: nil,
-              balance_amount: nil,
-              points_balance_amount: nil,
-              gift_card: nil
-
-    ## `Access` behaviour implementations
-
-    def fetch(term, key) do
-      Map.fetch(term, key)
-    end
-
-    def get(term, key, default) do
-      Map.get(term, key, default)
-    end
-
-    def get_and_update(term, key, list) do
-      Map.get(term, key, list)
-    end
-
-    def pop(term, key) do
-      Map.pop(term, key)
-    end
-  end
-
-  defmodule GatewayError do
-    defexception message: nil
-  end
-
-  defmodule NotImplementedError do
-    defexception message: nil
-  end
-
-  defmodule UnsupportedTransactionError do
-    defexception message: nil
-  end
-
-  defmodule EnumeratedType do
-    def create(module, values) do
-      for {name, value} <- values do
-        module_name = Module.concat(module, name)
-        contents =
-          quote do
-            def value, do: unquote(value)
-          end
-        Module.create(module_name, contents, Macro.Env.location(__ENV__))
-      end
-    end
-  end
-
-  defmodule PaymentMethodType do
-    use Bitwise, only_operators: true
-    EnumeratedType.create(__MODULE__,
-      Reference: 1 <<< 0,
-      Credit: 1 <<< 1,
-      Debit: 1 <<< 2,
-      EBT: 1 <<< 3,
-      Cash: 1 <<< 4,
-      ACH: 1 <<< 5,
-      Gift: 1 <<< 6,
-      Recurring: 1 <<< 7
-    )
-  end
-
-  defmodule TransactionModifier do
-    use Bitwise, only_operators: true
-    EnumeratedType.create(__MODULE__,
-      None: 1 <<< 0,
-      Incremental: 1 <<< 1,
-      Additional: 1 <<< 2,
-      Offline: 1 <<< 3,
-      LevelII: 1 <<< 4,
-      FraudDecline: 1 <<< 5,
-      ChipDecline: 1 <<< 6,
-      CashBack: 1 <<< 7,
-      Voucher: 1 <<< 8,
-    )
-  end
-
-  defmodule TransactionType do
-    use Bitwise, only_operators: true
-    EnumeratedType.create(__MODULE__,
-      Decline: 1 <<< 0,
-      Verify: 1 <<< 1,
-      Capture: 1 <<< 2,
-      Auth: 1 <<< 3,
-      Refund: 1 <<< 4,
-      Reversal: 1 <<< 5,
-      Sale: 1 <<< 6,
-      Edit: 1 <<< 7,
-      Void: 1 <<< 8,
-      AddValue: 1 <<< 9,
-      Balance: 1 <<< 10,
-      Activate: 1 <<< 11,
-      Alias: 1 <<< 12,
-      Replace: 1 <<< 13,
-      Reward: 1 <<< 14,
-      Deactivate: 1 <<< 15,
-      BatchClose: 1 <<< 16,
-      Create: 1 <<< 17,
-      Delete: 1 <<< 18,
-      BenefitWithDrawal: 1 <<< 19,
-      Fetch: 1 <<< 20,
-    )
-  end
+  import GlobalPayments.Api.Util.Xml
 
   def process_authorization(%AuthorizationBuilder{} = builder, config) do
     request_data =
@@ -207,30 +97,7 @@ defmodule GlobalPayments.Api.Gateways.PorticoConnector do
     end
   end
 
-  def node_value(root, path) when is_binary(path) do
-    node_value(root, to_charlist(path))
-  end
-  def node_value(root, path) do
-    :xmerl_xpath.string(path, root)
-    |> List.first()
-    |> get_node()
-    |> Access.get(:content)
-    |> get_value()
-  end
 
-  defp get_node(nil), do: nil
-  defp get_node(node) do
-    node |> xmlElement
-  end
-
-  defp get_value(nil), do: nil
-  defp get_value([]), do: nil
-  defp get_value([node | _]) do
-    node
-    |> xmlText()
-    |> Access.get(:value)
-    |> to_string()
-  end
 
   defp build_header(config) do
     credentials =
@@ -254,8 +121,7 @@ defmodule GlobalPayments.Api.Gateways.PorticoConnector do
   ## Examples
 
       iex> alias GlobalPayments.Api.Gateways.PorticoConnector
-      iex> alias GlobalPayments.Api.Gateways.PorticoConnector.TransactionType
-      iex> alias GlobalPayments.Api.Gateways.PorticoConnector.PaymentMethodType
+      iex> alias GlobalPayments.Api.Entities.Enums.{PaymentMethodType, TransactionType}
       iex> PorticoConnector.map_request_type(%{transaction_type: TransactionType.BatchClose})
       :BatchClose
       iex> PorticoConnector.map_request_type(%{transaction_type: TransactionType.Verify})
@@ -433,32 +299,4 @@ defmodule GlobalPayments.Api.Gateways.PorticoConnector do
         raise UnsupportedTransactionError, message: "Unknown transaction"
     end
   end
-
-  @doc """
-  Adds terms from `container` to `elements` when a term's key is present in `key_map`
-
-  ## Examples
-
-      iex> alias GlobalPayments.Api.Gateways.PorticoConnector
-      iex> PorticoConnector.maybe_add_elements([], %{}, [])
-      []
-      iex> PorticoConnector.maybe_add_elements([{:element, "value"}], %{}, [])
-      [{:element, "value"}]
-      iex> PorticoConnector.maybe_add_elements([], %{key: "term"}, [])
-      []
-      iex> PorticoConnector.maybe_add_elements([], %{key: "term"}, [key: :TagName])
-      [{:TagName, ['term']}]
-      iex> PorticoConnector.maybe_add_elements([{:element, "value"}], %{key: "term"}, [key: :TagName])
-      [{:TagName, ['term']}, {:element, "value"}]
-
-  """
-  def maybe_add_elements(elements, container, key_map) when is_map(container) or is_map(container) do
-    Enum.reduce(key_map, elements, fn ({key, tag}, acc) ->
-      case Access.fetch(container, key) do
-        :error -> acc
-        {:ok, term} -> [{tag, [to_charlist(term)]} | acc]
-      end
-    end)
-  end
-  def maybe_add_elements(elements, nil, _key_map), do: elements
 end

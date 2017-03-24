@@ -1,12 +1,13 @@
 defmodule GlobalPayments.ApiTest do
-  use ExUnit.Case
-  doctest GlobalPayments.Api
-  doctest GlobalPayments.Api.Gateways.PorticoConnector
-
   alias GlobalPayments.Api.Builders.AuthorizationBuilder
   alias GlobalPayments.Api.Gateways.PorticoConnector
-  alias GlobalPayments.Api.Gateways.PorticoConnector.UnsupportedTransactionError
+  alias GlobalPayments.Api.Entities.Errors.UnsupportedTransactionError
   alias GlobalPayments.Api.PaymentMethods.CreditCardData
+
+  use ExUnit.Case
+  doctest GlobalPayments.Api
+  doctest PorticoConnector
+  doctest GlobalPayments.Api.Util.Xml
 
   setup do
     %{config: %{secret_api_key: "skapi_cert_MTyMAQBiHVEAewvIzXVFcmUd2UcyBge_eCpaASUp0A",

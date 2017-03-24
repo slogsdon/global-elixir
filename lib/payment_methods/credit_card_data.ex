@@ -1,7 +1,8 @@
 defmodule GlobalPayments.Api.PaymentMethods.CreditCardData do
   alias GlobalPayments.Api.Builders.AuthorizationBuilder
-  alias GlobalPayments.Api.Gateways.PorticoConnector.PaymentMethodType
-  alias GlobalPayments.Api.Gateways.PorticoConnector.TransactionType
+  alias GlobalPayments.Api.Entities.Enums.{PaymentMethodType, TransactionType}
+  use GlobalPayments.Api.Util.Accessible
+
   @behaviour Access
 
   defstruct number: nil,
@@ -18,23 +19,5 @@ defmodule GlobalPayments.Api.PaymentMethods.CreditCardData do
     struct!(AuthorizationBuilder, transaction_type: TransactionType.Sale)
     |> AuthorizationBuilder.with_amount(amount)
     |> AuthorizationBuilder.with_payment_method(card)
-  end
-
-  ## `Access` behaviour implementations
-
-  def fetch(term, key) do
-    Map.fetch(term, key)
-  end
-
-  def get(term, key, default) do
-    Map.get(term, key, default)
-  end
-
-  def get_and_update(term, key, list) do
-    Map.get(term, key, list)
-  end
-
-  def pop(term, key) do
-    Map.pop(term, key)
   end
 end
